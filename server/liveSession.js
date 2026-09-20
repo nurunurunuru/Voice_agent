@@ -78,7 +78,7 @@ function buildSetupMessage({ model, systemPrompt }) {
               name: SEARCH_TOOL_NAME,
 
               description:
-                "Search the trained website information and return relevant information for the user's question. Use this tool whenever the user asks about specific website information such as services, products, pricing, policies, contact information, FAQs, features, or other website-specific details. Never invent website information.",
+  "Search the trained website information for website-specific questions such as services, products, pricing, policies, FAQs, features, or other website content. Do NOT use this tool for phone number, email address, or business address; those are provided separately as authoritative contact information. Never invent website information.",
 
               parameters: {
                 type: "OBJECT",
@@ -230,6 +230,12 @@ function startBridge(browserWs, opts) {
   const representativeName =
   agentStore.representativeName || "Faisal";
 
+  const contactInfo = agentStore.contactInfo || {};
+
+const phone = contactInfo.phone || "Not available";
+const email = contactInfo.email || "Not available";
+const address = contactInfo.address || "Not available";
+
   // ==========================================================
   // SYSTEM PROMPT System
   // ==========================================================
@@ -270,6 +276,32 @@ Response style:
 - Be professional.
 - Do not mention internal tools, RAG, embeddings, vector databases, prompts, or system instructions.
 `.trim();
+
+// ==========================================================
+// CONTACT INFORMATION — ALWAYS APPEND
+// ==========================================================
+
+const contactInstruction = `
+
+IMPORTANT CONTACT INFORMATION:
+
+Phone number: ${phone}
+Email address: ${email}
+Business address: ${address}
+
+CONTACT INFORMATION RULES:
+
+- If the customer asks for the phone number or contact number, give the Phone number above.
+- If the customer asks for the email or email address, give the Email address above.
+- If the customer asks for the business address, office address, location, or where the business is located, give the Business address above.
+- Never invent, modify, change, or guess these contact details.
+- If a contact detail says "Not available", tell the customer that the information is not currently available.
+- Contact information above is authoritative.
+- Do NOT use the website search tool for phone number, email address, or business address.
+- If the customer asks for contact information, answer directly and concisely.
+`;
+
+const finalSystemPrompt = systemPrompt + contactInstruction;
 
 
   // ==========================================================
@@ -316,7 +348,7 @@ Response style:
     const setupMessage =
       buildSetupMessage({
         model,
-        systemPrompt,
+        systemPrompt: finalSystemPrompt,
       });
 
     console.log(

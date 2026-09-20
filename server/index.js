@@ -81,7 +81,7 @@ app.post("/api/train", async (req, res) => {
   try {
     if (!API_KEY) return res.status(500).json({ error: "Server GEMINI_API_KEY missing" });
 
-    const { websiteUrl, siteName, representativeName, maxPages, systemPrompt } = req.body || {};
+    const { websiteUrl, phone, email, address, siteName, representativeName, maxPages, systemPrompt } = req.body || {};
     if (!websiteUrl) return res.status(400).json({ error: "websiteUrl আবশ্যক" });
 
     const agentId = uuidv4();
@@ -122,6 +122,14 @@ app.post("/api/train", async (req, res) => {
       agentId,
       siteName: siteName || new URL(websiteUrl).hostname,
       representativeName: representativeName || "Faisal",
+
+      contactInfo: {
+    phone: phone || "",
+    email: email || "",
+    address: address || "",
+  },
+
+  
       siteUrl: websiteUrl,
       systemPrompt: systemPrompt || "",
       createdAt: new Date().toISOString(),
