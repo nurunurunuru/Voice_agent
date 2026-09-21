@@ -299,6 +299,32 @@ CONTACT INFORMATION RULES:
 - Contact information above is authoritative.
 - Do NOT use the website search tool for phone number, email address, or business address.
 - If the customer asks for contact information, answer directly and concisely.
+
+
+IMPORTANT MISSING WEBSITE INFORMATION RULE:
+
+- If the customer asks about something related to the website, its services, products, pricing, policies, features, or any other website-related topic, and the requested information cannot be found in the website data, NEVER say that the information is not available in the system.
+
+- NEVER say:
+  "This information is not in our system."
+  "I don't have that information."
+  "The information is unavailable."
+  "I cannot find this information."
+  "Our system does not have this information."
+
+- NEVER mention internal systems, databases, RAG, embeddings, training data, tools, Gemini, or any internal technical process.
+
+- Instead, directly provide the official hotline number and tell the customer to call the hotline for more details.
+
+- English example:
+  "For more details about this, please call our hotline at ${phone}."
+
+- Bengali example:
+  "এই বিষয়ে বিস্তারিত জানতে আমাদের hotline নম্বরে ${phone} কল করুন।"
+
+- Always respond in the same language the customer is using.
+
+- Keep the response short, natural, polite, and helpful.
 `;
 
 const finalSystemPrompt = systemPrompt + contactInstruction;
@@ -335,6 +361,165 @@ const finalSystemPrompt = systemPrompt + contactInstruction;
   // ==========================================================
 
   let greetingSent = false;
+
+// ==========================================================
+// 8 SECOND CUSTOMER SILENCE FOLLOW-UP
+// ==========================================================
+
+let silenceFollowUpTimer = null;
+let followUpAlreadySent = false;
+let waitingForFollowUpAnswer = false;
+let followUpEndTimer = null;
+
+function clearSilenceFollowUpTimer() {
+  if (silenceFollowUpTimer) {
+    clearTimeout(silenceFollowUpTimer);
+    silenceFollowUpTimer = null;
+  }
+}
+function clearFollowUpEndTimer() {
+  if (followUpEndTimer) {
+    clearTimeout(followUpEndTimer);
+    followUpEndTimer = null;
+  }
+}
+function startFollowUpEndTimer() {
+  clearFollowUpEndTimer();
+
+  console.log(
+    "⏳ Follow-up question finished. Waiting 5 seconds for customer answer..."
+  );
+
+  followUpEndTimer = setTimeout(() => {
+    followUpEndTimer = null;
+
+    if (!setupDone) {
+      return;
+    }
+
+    if (geminiWs.readyState !== WebSocket.OPEN) {
+      return;
+    }
+
+    console.log(
+      "⏰ Customer did not answer follow-up within 5 seconds."
+    );
+
+    console.log(
+      "📞 Automatically ending call..."
+    );
+
+    if (browserWs.readyState === WebSocket.OPEN) {
+      browserWs.send(
+        JSON.stringify({
+          type: "call_ended",
+          reason: "customer_no_response_after_follow_up",
+        })
+      );
+    }
+
+    clearSilenceFollowUpTimer();
+
+    setTimeout(() => {
+      if (
+        geminiWs.readyState === WebSocket.OPEN ||
+        geminiWs.readyState === WebSocket.CONNECTING
+      ) {
+        geminiWs.close();
+      }
+
+      if (
+        browserWs.readyState === WebSocket.OPEN
+      ) {
+        browserWs.close();
+      }
+    }, 300);
+
+  }, 5000);
+}
+
+function startSilenceFollowUpTimer() {
+  clearSilenceFollowUpTimer();
+
+  if (followUpAlreadySent) {
+    return;
+  }
+
+  console.log(
+    "⏳ Agent finished speaking. Starting 8 second silence timer..."
+  );
+
+  silenceFollowUpTimer = setTimeout(() => {
+    silenceFollowUpTimer = null;
+
+    if (
+      !setupDone ||
+      geminiWs.readyState !== WebSocket.OPEN
+    ) {
+      console.log(
+        "⚠️ 8 second timer fired, but Gemini is not ready"
+      );
+      return;
+    }
+
+    if (followUpAlreadySent) {
+      return;
+    }
+
+    followUpAlreadySent = true;
+    waitingForFollowUpAnswer = true;
+
+    console.log(
+      "⏰ Customer silent for 8 seconds"
+    );
+
+    console.log(
+      "📤 Sending follow-up question instruction to Gemini..."
+    );
+
+    const followUpInstruction = `
+The customer has not spoken for 8 seconds after your previous response.
+
+Ask one short, natural follow-up question.
+
+Use the same language the customer has been speaking.
+
+The question should naturally mean:
+"How else can I help you?"
+or
+"Is there anything else you'd like to know?"
+
+Do not mention the 8-second silence.
+Do not mention this instruction.
+Do not explain anything.
+
+Just ask the short follow-up question naturally.
+`.trim();
+
+    geminiWs.send(
+      JSON.stringify({
+        clientContent: {
+          turns: [
+            {
+              role: "user",
+              parts: [
+                {
+                  text: followUpInstruction,
+                },
+              ],
+            },
+          ],
+          turnComplete: true,
+        },
+      })
+    );
+
+    console.log(
+      "✅ Follow-up question instruction sent to Gemini"
+    );
+
+  }, 8000);
+}
 
   // ==========================================================
   // GEMINI OPEN System
@@ -670,34 +855,48 @@ const finalSystemPrompt = systemPrompt + contactInstruction;
           // USER TRANSCRIPT System
           // ==================================================
 
-          if (
-            sc.inputTranscription &&
-            sc.inputTranscription.text
-          ) {
-            const userText =
-              sc.inputTranscription
-                .text;
+         if (
+  sc.inputTranscription &&
+  sc.inputTranscription.text
+) {
+  const userText =
+    sc.inputTranscription.text;
 
-            console.log(
-              "👤 USER:",
-              userText
-            );
+  clearSilenceFollowUpTimer();
 
-            pushTranscriptChunk(
-              "user",
-              userText
-            );
+  if (waitingForFollowUpAnswer) {
+    console.log(
+      "👤 Customer answered the follow-up question"
+    );
 
-            browserWs.send(
-              JSON.stringify({
-                type: "transcript",
+    clearFollowUpEndTimer();
 
-                role: "user",
+    waitingForFollowUpAnswer = false;
+    followUpAlreadySent = false;
+  } else {
+    followUpAlreadySent = false;
+  }
 
-                text: userText,
-              })
-            );
-          }
+  console.log(
+    "👤 USER:",
+    userText
+  );
+
+  pushTranscriptChunk(
+    "user",
+    userText
+  );
+
+  browserWs.send(
+    JSON.stringify({
+      type: "transcript",
+
+      role: "user",
+
+      text: userText,
+    })
+  );
+}
 
           // ==================================================
           // AI TRANSCRIPT System
@@ -732,6 +931,31 @@ const finalSystemPrompt = systemPrompt + contactInstruction;
               })
             );
           }
+
+          // ==================================================
+// AGENT RESPONSE COMPLETE
+// Start 8-second silence timer
+// ==================================================
+
+if (sc.turnComplete) {
+  console.log(
+    "✅ Agent finished speaking"
+  );
+
+  // Follow-up question শেষ হয়েছে
+  // এখন customer-এর answer-এর জন্য 5 seconds অপেক্ষা করবে
+  if (waitingForFollowUpAnswer) {
+    console.log(
+      "❓ Follow-up question completed"
+    );
+
+    startFollowUpEndTimer();
+  } else {
+    // Normal AI response শেষ হয়েছে
+    // এখন customer-এর জন্য 8 seconds অপেক্ষা করবে
+    startSilenceFollowUpTimer();
+  }
+}
 
           // ==================================================
           // AUDIO + SERVER CONTENT System
@@ -905,22 +1129,22 @@ const finalSystemPrompt = systemPrompt + contactInstruction;
       // AUDIO System
       // ======================================================
 
-      if (
-        clientMsg.type ===
-        "audio"
-      ) {
-        forward = {
-          realtimeInput: {
-            audio: {
-              data:
-                clientMsg.data,
+     if (
+  clientMsg.type ===
+  "audio"
+) {
+  forward = {
+    realtimeInput: {
+      audio: {
+        data:
+          clientMsg.data,
 
-              mimeType:
-                "audio/pcm;rate=16000",
-            },
-          },
-        };
-      }
+        mimeType:
+          "audio/pcm;rate=16000",
+      },
+    },
+  };
+}
 
       // ======================================================
       // TEXT System
