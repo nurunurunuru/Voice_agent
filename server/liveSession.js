@@ -1136,20 +1136,7 @@ Just ask the short follow-up question naturally.
     if (clientMsg.type === "audio") {
       // Any actual browser audio means the customer is
       // interacting, so cancel silence follow-up.
-      clearSilenceFollowUpTimer();
-
-      // If customer starts answering the follow-up,
-      // cancel the 5-second end timer.
-      if (waitingForFollowUpAnswer) {
-        clearFollowUpEndTimer();
-
-        waitingForFollowUpAnswer = false;
-        followUpAlreadySent = false;
-
-        console.log(
-          "🎤 Customer started answering follow-up"
-        );
-      }
+     
 
       forward = {
         realtimeInput: {
