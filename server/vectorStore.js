@@ -1,57 +1,119 @@
 // server/vectorStore.js
-// প্রতিটা agent (মানে প্রতিটা ওয়েবসাইট) এর জন্য আলাদা JSON ফাইলে chunk + embedding
-// সেভ করে রাখা হয়। বড় স্কেলে গেলে এটাকে Pinecone/Qdrant/pgvector দিয়ে replace
-// করা যাবে, কিন্তু কয়েকশ chunk পর্যন্ত এই সাধারণ ফাইল-ভিত্তিক approach ঠিকঠাক কাজ করে।
 
-const fs = require("fs");
-const path = require("path");
+const { getDatabase } = require("./mongodb");
 const { cosineSimilarity } = require("./embeddings");
 
-const DATA_DIR = path.join(__dirname, "..", "data");
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
+const COLLECTION_NAME = "agents";
 
-function storePath(agentId) {
-  return path.join(DATA_DIR, `${agentId}.json`);
+async function getCollection() {
+  const db = await getDatabase();
+  return db.collection(COLLECTION_NAME);
 }
 
-function saveStore(agentId, store) {
-  fs.writeFileSync(storePath(agentId), JSON.stringify(store, null, 2), "utf-8");
+// ============================================================
+// SAVE AGENT
+// ============================================================
+
+async function saveStore(agentId, store) {
+  const collection = await getCollection();
+
+  await collection.replaceOne(
+    { agentId },
+    {
+      ...store,
+      agentId,
+      updatedAt: new Date().toISOString(),
+    },
+    { upsert: true }
+  );
+
+  console.log(`💾 Agent saved to MongoDB: ${agentId}`);
 }
 
-function loadStore(agentId) {
-  const p = storePath(agentId);
-  if (!fs.existsSync(p)) return null;
-  return JSON.parse(fs.readFileSync(p, "utf-8"));
+// ============================================================
+// LOAD AGENT
+// ============================================================
+
+async function loadStore(agentId) {
+  const collection = await getCollection();
+
+  const store = await collection.findOne(
+    { agentId },
+    { projection: { _id: 0 } }
+  );
+
+  return store || null;
 }
 
-function agentExists(agentId) {
-  return fs.existsSync(storePath(agentId));
+// ============================================================
+// CHECK AGENT EXISTS
+// ============================================================
+
+async function agentExists(agentId) {
+  const collection = await getCollection();
+
+  const result = await collection.findOne(
+    { agentId },
+    {
+      projection: {
+        _id: 1,
+      },
+    }
+  );
+
+  return !!result;
 }
 
-function listAgents() {
-  return fs
-    .readdirSync(DATA_DIR)
-    .filter((f) => f.endsWith(".json"))
-    .map((f) => f.replace(/\.json$/, ""));
+// ============================================================
+// LIST AGENTS
+// ============================================================
+
+async function listAgents() {
+  const collection = await getCollection();
+
+  const agents = await collection
+    .find(
+      {},
+      {
+        projection: {
+          _id: 0,
+          agentId: 1,
+        },
+      }
+    )
+    .toArray();
+
+  return agents.map((agent) => agent.agentId);
 }
 
-/**
- * store shape:
- * {
- *   agentId, siteName, siteUrl, systemPrompt, createdAt,
- *   chunks: [{ id, url, title, text, embedding: number[] }]
- * }
- */
+// ============================================================
+// SEARCH RAG
+// ============================================================
 
-function search(agentId, queryEmbedding, topK = 5) {
-  const store = loadStore(agentId);
-  if (!store) return [];
+async function search(agentId, queryEmbedding, topK = 5) {
+  const store = await loadStore(agentId);
+
+  if (!store || !Array.isArray(store.chunks)) {
+    return [];
+  }
+
   const scored = store.chunks.map((c) => ({
     ...c,
-    score: cosineSimilarity(queryEmbedding, c.embedding),
+    score: cosineSimilarity(
+      queryEmbedding,
+      c.embedding
+    ),
   }));
+
   scored.sort((a, b) => b.score - a.score);
+
   return scored.slice(0, topK);
 }
 
-module.exports = { saveStore, loadStore, agentExists, listAgents, search, DATA_DIR };
+module.exports = {
+  saveStore,
+  loadStore,
+  agentExists,
+  listAgents,
+  search,
+};

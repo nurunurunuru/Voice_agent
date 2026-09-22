@@ -10,6 +10,7 @@ const { v4: uuidv4 } = require("uuid");
 const { crawlWebsite, chunkText } = require("./scraper");
 const { embedBatch } = require("./embeddings");
 const vectorStore = require("./vectorStore");
+const { connectMongoDB } = require("./mongodb");
 const { startBridge } = require("./liveSession");
 const leads = require("./leads");
 const crypto = require("crypto");
@@ -118,7 +119,7 @@ app.post("/api/train", async (req, res) => {
       embedding: embeddings[i],
     }));
 
-    vectorStore.saveStore(agentId, {
+    await vectorStore.saveStore(agentId, {
       agentId,
       siteName: siteName || new URL(websiteUrl).hostname,
       representativeName: representativeName || "Faisal",
@@ -159,8 +160,8 @@ app.post("/api/train", async (req, res) => {
 });
 
 // ট্রেইনিং স্ট্যাটাস চেক করার জন্য (ঐচ্ছিক)
-app.get("/api/agent/:agentId", (req, res) => {
-  const store = vectorStore.loadStore(req.params.agentId);
+app.get("/api/agent/:agentId", async (req, res) => {
+  const store = await vectorStore.loadStore(req.params.agentId);
   if (!store) return res.status(404).json({ error: "agent পাওয়া যায়নি" });
   res.json({
     agentId: store.agentId,
@@ -177,8 +178,10 @@ app.get("/api/agent/:agentId", (req, res) => {
  * -> ওই agent এর সাথে কথা বলা customer দের list (নাম/ফোন/ইমেইল/সময়)
  * -> শুধু সঠিক adminKey দিলেই দেখা যাবে (train করার সময় পাওয়া key)
  */
-app.get("/api/agent/:agentId/leads", (req, res) => {
-  const store = vectorStore.loadStore(req.params.agentId);
+app.get(
+  "/api/agent/:agentId/leads",
+  async (req, res) => {
+ const store = await vectorStore.loadStore(req.params.agentId);
   if (!store) return res.status(404).json({ error: "agent পাওয়া যায়নি" });
 
   const key = req.query.key;
@@ -196,25 +199,29 @@ app.get("/api/agent/:agentId/leads", (req, res) => {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/ws/voice" });
 
-wss.on("connection", (ws, req) => {
+wss.on("connection", async (ws, req) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
   const agentId = url.searchParams.get("agentId");
   const customerName = url.searchParams.get("name") || "";
   const customerPhone = url.searchParams.get("phone") || "";
   const customerEmail = url.searchParams.get("email") || "";
 
-  if (!agentId || !vectorStore.agentExists(agentId)) {
-    ws.send(JSON.stringify({ type: "error", message: "Invalid or missing agentId" }));
-    ws.close();
-    return;
-  }
-  if (!API_KEY) {
-    ws.send(JSON.stringify({ type: "error", message: "Server not configured" }));
-    ws.close();
-    return;
-  }
+ const exists = await vectorStore.agentExists(agentId);
 
-  const store = vectorStore.loadStore(agentId);
+if (!agentId || !exists) {
+  ws.send(
+    JSON.stringify({
+      type: "error",
+      message: "Invalid or missing agentId",
+    })
+  );
+
+  ws.close();
+
+  return;
+}
+
+  const store = await vectorStore.loadStore(agentId);
   const siteName = store?.siteName || agentId;
 
   // customer er lead ekhon call SHESH hole (transcript soho) save hoy,
@@ -248,9 +255,30 @@ wss.on("connection", (ws, req) => {
  */
 app.post("/api/manychat-reply", messagingReply.handleManyChatRequest);
 
-server.listen(PORT,"0.0.0.0", () => {
-  console.log(`🚀 Server চলছে: http://localhost:${PORT}`);
-  console.log(`   Train:  POST http://localhost:${PORT}/api/train`);
-  console.log(`   Widget: GET  http://localhost:${PORT}/widget.js`);
-  console.log(`   Voice:  WS   ws://localhost:${PORT}/ws/voice?agentId=...`);
-});
+async function startServer() {
+  try {
+    await connectMongoDB();
+
+    server.listen(PORT, "0.0.0.0", () => {
+      console.log(`🚀 Server চলছে: http://localhost:${PORT}`);
+      console.log(
+        `   Train:  POST http://localhost:${PORT}/api/train`
+      );
+      console.log(
+        `   Widget: GET  http://localhost:${PORT}/widget.js`
+      );
+      console.log(
+        `   Voice:  WS   ws://localhost:${PORT}/ws/voice?agentId=...`
+      );
+    });
+  } catch (err) {
+    console.error(
+      "❌ MongoDB connection failed:",
+      err
+    );
+
+    process.exit(1);
+  }
+}
+
+startServer();
